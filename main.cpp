@@ -9,6 +9,8 @@ using namespace std;
 struct OptionPrices {
     double call_price;
     double put_price;
+    double call_err;
+    double put_err;
 };
  //Standar normal CDF
 double norm_cdf(const double& x) {
@@ -25,7 +27,6 @@ OptionPrices black_scholes_prices(const double& S, const double& X, const double
         result.call_price = S * norm_cdf(d1) - X * std::exp(-r * T) * norm_cdf(d2);
         result.put_price = X * std::exp(-r * T) * norm_cdf(-d2) - S * norm_cdf(-d1); 
 
-
     return result;
 }
 
@@ -35,7 +36,9 @@ OptionPrices monte_carlo_option_prices(const double& S, const double& X, const d
     double scaled_S = S * exp(T*(r - (0.5*v*v)));
     double future_S = 0;
     double call_payoff_sum = 0;
+    double call_payoff_sq = 0;
     double put_payoff_sum = 0;
+    double put_payoff_sq = 0;
 
     random_device rd;
     mt19937 gen(rd());
@@ -46,13 +49,32 @@ OptionPrices monte_carlo_option_prices(const double& S, const double& X, const d
         double x = dist(gen); 
 
         future_S = scaled_S * exp(v*sqrt(T)*x);
-        call_payoff_sum += max(future_S - X, 0.0);
-        put_payoff_sum += max(X-future_S, 0.0);
+        double call_payoff = max(future_S - X, 0.0);
+        double put_payoff = max(X-future_S, 0.0);
+
+        call_payoff_sum += call_payoff;
+        call_payoff_sq += call_payoff * call_payoff;
+
+        put_payoff_sum += put_payoff;
+        put_payoff_sq += put_payoff * put_payoff;
     }
 
+    double N = static_cast<double>(num_sims);
+    double discount = exp(-r * T);
+
+    double call_mean = call_payoff_sum / N;
+    double call_variance = (call_payoff_sq / N) - (call_mean * call_mean);
+    double call_err = discount * sqrt(call_variance / N);
+
+    double put_mean = put_payoff_sum / N;
+    double put_variance = (put_payoff_sq / N) - (put_mean * put_mean);
+    double put_err = discount * sqrt(put_variance / N);
+
     OptionPrices result;
-    result.call_price = (call_payoff_sum / static_cast<double>(num_sims)) * exp(-r*T);
-    result.put_price = (put_payoff_sum / static_cast<double>(num_sims)) * exp(-r*T);
+    result.call_price = call_mean * discount;
+    result.put_price = put_mean * discount;
+    result.call_err = call_err;
+    result.put_err = put_err;
 
     return result;
 }
@@ -68,8 +90,8 @@ int main() {
     OptionPrices monte_carlo_prices = monte_carlo_option_prices(S, X, r, v, T, num_sims);
     OptionPrices bs_prices = black_scholes_prices(S, X, r, v, T);
     
-    cout<<"Monte Carlo Call price: "<<monte_carlo_prices.call_price<<endl;
-    cout<<"Monte Carlo Put price: "<<monte_carlo_prices.put_price<<endl;
+    cout<<"Monte Carlo Call price: "<<monte_carlo_prices.call_price<<" +/- "<<monte_carlo_prices.call_err<<endl;
+    cout<<"Monte Carlo Put price: "<<monte_carlo_prices.put_price<<" +/- "<<monte_carlo_prices.put_err<<endl;
     cout<<"Black-Scholes Call price: "<<bs_prices.call_price<<endl;
     cout<<"Black-Scholes Put price: "<<bs_prices.put_price<<endl;
 
