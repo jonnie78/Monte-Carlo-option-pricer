@@ -90,7 +90,7 @@ OptionPrices monte_carlo_option_prices(const double& S, const double& X, const d
 }
 
 //Function for the individual threads to run that outputs the payoff and payoff squared sums
-PartialSums thread_worker_function(const double& S, const double& X, const double& r, const double& v, const double& T, const int& chunk_sims) {
+void thread_worker_function(const double& S, const double& X, const double& r, const double& v, const double& T, const int& chunk_sims, PartialSums& output) {
     
     double scaled_S = S * exp(T*(r - (0.5*v*v)));
     double future_S = 0;
@@ -99,6 +99,7 @@ PartialSums thread_worker_function(const double& S, const double& X, const doubl
     double put_payoff_sum = 0;
     double put_payoff_sq = 0;
 
+    //RNG outside of loop so that its different for each thread
     random_device rd;
     mt19937 gen(rd());
     normal_distribution<double> dist(0.0, 1.0);
@@ -118,11 +119,59 @@ PartialSums thread_worker_function(const double& S, const double& X, const doubl
         put_payoff_sq += put_payoff * put_payoff;
     }
 
-    PartialSums result;
-    result.call_sum = call_payoff_sum;
-    result.call_sum_sq = call_payoff_sq;
-    result.put_sum = put_payoff_sum;
-    result.put_sum_sq = put_payoff_sq;
+    output.call_sum = call_payoff_sum;
+    output.call_sum_sq = call_payoff_sq;
+    output.put_sum = put_payoff_sum;
+    output.put_sum_sq = put_payoff_sq;
+}
+
+//Function that calculates prices using multiple threads
+OptionPrices thread_funcion(const int& num_sims, const double& S, const double& X, const double& r, const double& v, const double& T) {
+
+    vector<std::thread> threads;
+    double total_call_payoff_sum = 0;
+    double total_call_payoff_sq = 0;
+    double total_put_payoff_sum = 0;
+    double total_put_payoff_sq = 0;
+
+    int num_threads = thread::hardware_concurrency();
+    vector<PartialSums> outputs(num_threads);
+    int base_chunk = num_sims / num_threads;
+    int remainder = num_sims % num_threads;
+
+    for (int i = 0; i < num_threads; i++) {
+        
+        int chunk_sims = base_chunk + (i < remainder ? 1 : 0);
+        threads.push_back(thread(thread_worker_function, S, X, r, v, T, chunk_sims, ref(outputs[i])));
+    }
+    
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    for (const auto& o : outputs) {
+        total_call_payoff_sum += o.call_sum;
+        total_call_payoff_sq += o.call_sum_sq;
+        total_put_payoff_sum += o.put_sum;
+        total_put_payoff_sq += o.put_sum_sq;
+    }
+
+    double N = static_cast<double>(num_sims);
+    double discount = exp(-r * T);
+
+    double call_mean = total_call_payoff_sum / N;
+    double call_variance = (total_call_payoff_sq / N) - (call_mean * call_mean);
+    double call_err = discount * sqrt(call_variance / N);
+
+    double put_mean = total_put_payoff_sum / N;
+    double put_variance = (total_put_payoff_sq / N) - (put_mean * put_mean);
+    double put_err = discount * sqrt(put_variance / N);
+
+    OptionPrices result;
+    result.call_price = call_mean * discount;
+    result.put_price = put_mean * discount;
+    result.call_err = call_err;
+    result.put_err = put_err;
 
     return result;
 }
@@ -136,13 +185,15 @@ int main() {
     double T = 1.0;    //Time till expiry (years)
 
     OptionPrices monte_carlo_prices = monte_carlo_option_prices(S, X, r, v, T, num_sims);
+    OptionPrices manual_thread_prices = thread_funcion(num_sims, S, X, r, v, T);
     OptionPrices bs_prices = black_scholes_prices(S, X, r, v, T);
     
     cout<<"Monte Carlo Call price: "<<monte_carlo_prices.call_price<<" +/- "<<monte_carlo_prices.call_err<<endl;
     cout<<"Monte Carlo Put price: "<<monte_carlo_prices.put_price<<" +/- "<<monte_carlo_prices.put_err<<endl;
+    cout<<"Manual thread Call price"<<manual_thread_prices.call_price<<" +/- "<<manual_thread_prices.call_err<<endl;
+    cout<<"Manual thread Put price"<<manual_thread_prices.put_price<<" +/- "<<manual_thread_prices.put_err<<endl;
     cout<<"Black-Scholes Call price: "<<bs_prices.call_price<<endl;
     cout<<"Black-Scholes Put price: "<<bs_prices.put_price<<endl;
-    cout<<thread::hardware_concurrency()<<endl;
 
     return 0;
 }
