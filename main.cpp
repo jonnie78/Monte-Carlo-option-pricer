@@ -1,6 +1,7 @@
 #include<algorithm> 
 #include<cmath>
 #include<random>
+#include<thread>
 #include<iostream>
 
 using namespace std;
@@ -12,6 +13,15 @@ struct OptionPrices {
     double call_err;
     double put_err;
 };
+
+//Struct that allows thread worker function to output all partical sums
+struct PartialSums {
+    double call_sum;
+    double call_sum_sq;
+    double put_sum;
+    double put_sum_sq;
+};
+
  //Standar normal CDF
 double norm_cdf(const double& x) {
     return 0.5 * std::erfc(-x / std::sqrt(2.0));
@@ -79,6 +89,44 @@ OptionPrices monte_carlo_option_prices(const double& S, const double& X, const d
     return result;
 }
 
+//Function for the individual threads to run that outputs the payoff and payoff squared sums
+PartialSums thread_worker_function(const double& S, const double& X, const double& r, const double& v, const double& T, const int& chunk_sims) {
+    
+    double scaled_S = S * exp(T*(r - (0.5*v*v)));
+    double future_S = 0;
+    double call_payoff_sum = 0;
+    double call_payoff_sq = 0;
+    double put_payoff_sum = 0;
+    double put_payoff_sq = 0;
+
+    random_device rd;
+    mt19937 gen(rd());
+    normal_distribution<double> dist(0.0, 1.0);
+
+    for (int i = 0; i < chunk_sims; i++) {
+  
+        double x = dist(gen); 
+
+        future_S = scaled_S * exp(v*sqrt(T)*x);
+        double call_payoff = max(future_S - X, 0.0);
+        double put_payoff = max(X-future_S, 0.0);
+
+        call_payoff_sum += call_payoff;
+        call_payoff_sq += call_payoff * call_payoff;
+
+        put_payoff_sum += put_payoff;
+        put_payoff_sq += put_payoff * put_payoff;
+    }
+
+    PartialSums result;
+    result.call_sum = call_payoff_sum;
+    result.call_sum_sq = call_payoff_sq;
+    result.put_sum = put_payoff_sum;
+    result.put_sum_sq = put_payoff_sq;
+
+    return result;
+}
+
 int main() {
     int num_sims = 10000000;   //Number of simulated paths                                                      
     double S = 100;  //Underlying asset price                                                                                  
@@ -94,6 +142,7 @@ int main() {
     cout<<"Monte Carlo Put price: "<<monte_carlo_prices.put_price<<" +/- "<<monte_carlo_prices.put_err<<endl;
     cout<<"Black-Scholes Call price: "<<bs_prices.call_price<<endl;
     cout<<"Black-Scholes Put price: "<<bs_prices.put_price<<endl;
+    cout<<thread::hardware_concurrency()<<endl;
 
     return 0;
 }
