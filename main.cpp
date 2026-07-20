@@ -3,26 +3,11 @@
 #include<random>
 #include<thread>
 #include<iostream>
+#include"Types.h"
 
 using namespace std;
 
-//Defining struct so that put and call price can be calculated in one function
-struct OptionPrices {
-    double call_price;
-    double put_price;
-    double call_err;
-    double put_err;
-};
-
-//Struct that allows thread worker function to output all partical sums
-struct PartialSums {
-    double call_sum;
-    double call_sum_sq;
-    double put_sum;
-    double put_sum_sq;
-};
-
- //Standar normal CDF
+ //Standard normal CDF
 double norm_cdf(const double& x) {
     return 0.5 * std::erfc(-x / std::sqrt(2.0));
 }
