@@ -28,7 +28,7 @@ Time taken(ms) for different numbers of simulations:
 ![Benchmark results for differnt numbers of simulations](image.png)
 ![Benchmark results for different numbers of options (10000 sims)](image-1.png)
 
-All times are in milliseconds 
+All times are in milliseconds, first graph is logarithmic 
 
 Compilation line (windows):
  g++ -Wall -o Monte-Carlo-option-pricer main.cpp Thread-Pool.cpp
