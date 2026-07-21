@@ -1,3 +1,5 @@
+#pragma once
+
 //Defining struct so that put and call price can be calculated in one function
 struct OptionPrices {
     double call_price;

@@ -4,6 +4,7 @@
 #include<thread>
 #include<iostream>
 #include"Types.h"
+#include"Thread-Pool.h"
 
 using namespace std;
 
@@ -21,6 +22,30 @@ OptionPrices black_scholes_prices(const double& S, const double& X, const double
     OptionPrices result;
         result.call_price = S * norm_cdf(d1) - X * std::exp(-r * T) * norm_cdf(d2);
         result.put_price = X * std::exp(-r * T) * norm_cdf(-d2) - S * norm_cdf(-d1); 
+
+    return result;
+}
+
+//Function that extratcs final computation of prices
+OptionPrices compute_final_result(const double& total_call_sum, const double& total_call_sum_sq, const double& total_put_sum, 
+    const double& total_put_sum_sq, const int& num_sims, const double& r, const double& T) {
+
+    double N = static_cast<double>(num_sims);
+    double discount = exp(-r * T);
+
+    double call_mean = total_call_sum / N;
+    double call_variance = (total_call_sum_sq / N) - (call_mean * call_mean);
+    double call_se = discount * sqrt(call_variance / N);
+
+    double put_mean = total_put_sum / N;
+    double put_variance = (total_put_sum_sq / N) - (put_mean * put_mean);
+    double put_se = discount * sqrt(put_variance / N);
+
+    OptionPrices result;
+    result.call_price = call_mean * discount;
+    result.put_price = put_mean * discount;
+    result.call_err = call_se;
+    result.put_err = put_se;
 
     return result;
 }
@@ -54,24 +79,7 @@ OptionPrices monte_carlo_option_prices(const double& S, const double& X, const d
         put_payoff_sq += put_payoff * put_payoff;
     }
 
-    double N = static_cast<double>(num_sims);
-    double discount = exp(-r * T);
-
-    double call_mean = call_payoff_sum / N;
-    double call_variance = (call_payoff_sq / N) - (call_mean * call_mean);
-    double call_err = discount * sqrt(call_variance / N);
-
-    double put_mean = put_payoff_sum / N;
-    double put_variance = (put_payoff_sq / N) - (put_mean * put_mean);
-    double put_err = discount * sqrt(put_variance / N);
-
-    OptionPrices result;
-    result.call_price = call_mean * discount;
-    result.put_price = put_mean * discount;
-    result.call_err = call_err;
-    result.put_err = put_err;
-
-    return result;
+    return compute_final_result(call_payoff_sum, call_payoff_sq, put_payoff_sum, put_payoff_sq, num_sims, r, T);
 }
 
 //Function for the individual threads to run that outputs the payoff and payoff squared sums
@@ -141,24 +149,48 @@ OptionPrices thread_funcion(const int& num_sims, const double& S, const double& 
         total_put_payoff_sq += o.put_sum_sq;
     }
 
-    double N = static_cast<double>(num_sims);
-    double discount = exp(-r * T);
+    return compute_final_result(total_call_payoff_sum, total_call_payoff_sq, total_put_payoff_sum, total_put_payoff_sq, num_sims, r, T);
+}
 
-    double call_mean = total_call_payoff_sum / N;
-    double call_variance = (total_call_payoff_sq / N) - (call_mean * call_mean);
-    double call_err = discount * sqrt(call_variance / N);
+//Wrapper for thread worker function so that it can be reused in thead pool
+PartialSums thread_worker_wrapper(const double& S, const double& X, const double& r, const double& v, const double& T, const int& chunk_sims) {
+    PartialSums output;
+    thread_worker_function(S, X, r, v, T, chunk_sims, output);
+    return output;
+}
 
-    double put_mean = total_put_payoff_sum / N;
-    double put_variance = (total_put_payoff_sq / N) - (put_mean * put_mean);
-    double put_err = discount * sqrt(put_variance / N);
+//Function that runs thread pool and calculated prices
+OptionPrices run_thread_pool(ThreadPool& pool, const int& num_sims, const double& S, const double& X, const double& r, const double& v, const double& T) {
 
-    OptionPrices result;
-    result.call_price = call_mean * discount;
-    result.put_price = put_mean * discount;
-    result.call_err = call_err;
-    result.put_err = put_err;
+    double total_call_payoff_sum = 0;
+    double total_call_payoff_sq = 0;
+    double total_put_payoff_sum = 0;
+    double total_put_payoff_sq = 0;
 
-    return result;
+    int num_threads = thread::hardware_concurrency();
+    int base_chunk = num_sims / num_threads;
+    int remainder = num_sims % num_threads;
+
+    vector<future<PartialSums>> futures;
+
+    for (int i = 0; i < num_threads; i++) {
+        int chunk_sims = base_chunk + (i < remainder ? 1 : 0);
+
+        futures.push_back(
+            pool.submit_task([=]() {
+                return thread_worker_wrapper(S, X, r, v, T, chunk_sims);
+            })
+        );
+    }
+    for (auto& f : futures) {
+        PartialSums result = f.get();
+        total_call_payoff_sum += result.call_sum;
+        total_call_payoff_sq += result.call_sum_sq;
+        total_put_payoff_sum += result.put_sum;
+        total_put_payoff_sq += result.put_sum_sq;
+    }
+
+    return compute_final_result(total_call_payoff_sum, total_call_payoff_sq, total_put_payoff_sum, total_put_payoff_sq, num_sims, r, T);
 }
 
 int main() {
@@ -169,14 +201,19 @@ int main() {
     double v = 0.2;    //Volatility of the underlying asset                                                           
     double T = 1.0;    //Time till expiry (years)
 
+    ThreadPool pool(12);
+
     OptionPrices monte_carlo_prices = monte_carlo_option_prices(S, X, r, v, T, num_sims);
     OptionPrices manual_thread_prices = thread_funcion(num_sims, S, X, r, v, T);
+    OptionPrices thread_pool_prices = run_thread_pool(pool, num_sims, S, X, r, v, T);
     OptionPrices bs_prices = black_scholes_prices(S, X, r, v, T);
     
     cout<<"Monte Carlo Call price: "<<monte_carlo_prices.call_price<<" +/- "<<monte_carlo_prices.call_err<<endl;
     cout<<"Monte Carlo Put price: "<<monte_carlo_prices.put_price<<" +/- "<<monte_carlo_prices.put_err<<endl;
-    cout<<"Manual thread Call price"<<manual_thread_prices.call_price<<" +/- "<<manual_thread_prices.call_err<<endl;
-    cout<<"Manual thread Put price"<<manual_thread_prices.put_price<<" +/- "<<manual_thread_prices.put_err<<endl;
+    cout<<"Manual thread Call price: "<<manual_thread_prices.call_price<<" +/- "<<manual_thread_prices.call_err<<endl;
+    cout<<"Manual thread Put price: "<<manual_thread_prices.put_price<<" +/- "<<manual_thread_prices.put_err<<endl;
+    cout<<"Thread pool Call price: "<<thread_pool_prices.call_price<<" +/- "<<thread_pool_prices.call_err<<endl;
+    cout<<"Thread pool Put price: "<<thread_pool_prices.put_price<<" +/- "<<thread_pool_prices.put_err<<endl;
     cout<<"Black-Scholes Call price: "<<bs_prices.call_price<<endl;
     cout<<"Black-Scholes Put price: "<<bs_prices.put_price<<endl;
 

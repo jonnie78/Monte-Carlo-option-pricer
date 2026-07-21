@@ -11,8 +11,10 @@ ThreadPool::ThreadPool(size_t num_threads) {
 }
 //Destructor
 ThreadPool::~ThreadPool() {
+    {
     unique_lock<std::mutex> lock(mutex);
     stop = true;
+    }
     condition_variable.notify_all();
     for (thread& thread : threads) {
         thread.join();
